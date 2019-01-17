@@ -1,0 +1,3 @@
+# Documentation
+
+Preprocessor for pSingular.

@@ -1,0 +1,7 @@
+re:^bin/
+re:^build/*
+re:^autosetup/jimsh0
+re:^adlib/config\.h
+re:^adlib/config-defs\.h
+re:^Makefile
+re:^config\.log
