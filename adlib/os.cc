@@ -7,12 +7,15 @@
 #endif
 
 Str *ReadFile(FILE *fp) {
+  char buffer[65536];
   if (fp == NULL)
     return NULL;
-  int ch;
   Str *result = new Str(1024);
-  while ((ch = getc(fp)) != EOF) {
-    result->add(ch);
+  for (;;) {
+    size_t nbytes = fread(buffer, 1, sizeof(buffer), fp);
+    if (nbytes == 0)
+      break;
+    result->add(buffer, nbytes);
   }
   return result;
 }

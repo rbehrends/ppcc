@@ -11,6 +11,8 @@
 const char *SymbolNames[] = {
   "SymNone",
   "SymClass",
+  "SymNamespace",
+  "SymExtern",
   "SymVAR",
   "SymEXTERN_VAR",
   "SymSTATIC_VAR",
@@ -114,6 +116,8 @@ bool Tokenize(SourceFile *source) {
     esc = "\\";
 
     "class"         { PUSH_TOKEN(SymClass); }
+    "namespace"     { PUSH_TOKEN(SymNamespace); }
+    "extern"        { PUSH_TOKEN(SymExtern); }
     "VAR"           { PUSH_TOKEN(SymVAR); }
     "EXTERN_VAR"    { PUSH_TOKEN(SymEXTERN_VAR); }
     "STATIC_VAR"    { PUSH_TOKEN(SymSTATIC_VAR); }

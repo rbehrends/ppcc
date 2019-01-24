@@ -18,6 +18,12 @@ static StrArr *init_list;
 static Dict *class_vars;
 static Dict *class_types;
 
+enum DeclType {
+  ExternDecl,
+  StaticDecl,
+  NormalDecl
+};
+
 INIT(DeclParser, {
   GCVar(space, Token(SymWS, S(" ")));
   GCVar(semicolon, Token(SymWS, S(";\n")));
@@ -39,14 +45,20 @@ struct State {
 class Parser : public GC {
 public:
   TokenList *input, *output;
+  SourceFile *source;
   Int pos, marker;
-  noinline Parser(TokenList *_input) {
-    if (_input->len() == 0 || _input->last().sym != SymEOF)
-      _input->add(eof);
-    input = _input;
+  Int init_count;
+  noinline Parser(SourceFile *_source) {
+    source = _source;
+    input = _source->tokens;
+    if (input->len() == 0 || input->last().sym != SymEOF)
+      input->add(eof);
     output = new TokenList();
     pos = 0;
     marker = 0;
+  }
+  bool c_source() {
+    return source->filename->ends_with(".c");
   }
   void skip_until(Word64 syms) {
     syms |= BIT(SymEOF);
@@ -125,6 +137,9 @@ public:
   Token &current() {
     return input->at(pos);
   }
+  Token &next() {
+    return input->at(pos+1);
+  }
   Symbol current_sym() {
     return input->at(pos).sym;
   }
@@ -170,11 +185,39 @@ public:
   }
 };
 
+bool IsLiteral(Parser *parser, Int start, Int end) {
+  Int op = 0;
+  Int lit = 0;
+  for (Int i = start; i < end; i++) {
+    Token &token = parser->token(i);
+    switch (token.sym) {
+      case SymWS:
+      case SymEOL:
+      case SymComment:
+        break;
+      case SymOp:
+        if (token.str->eq("-") || token.str->eq("+"))
+          op++;
+        else
+          return false;
+        break;
+      case SymLiteral:
+        lit++;
+        break;
+      default:
+        return false;
+    }
+  }
+  return lit >= 1 && op <= 1;
+}
+
 void EmitDecl(Parser *parser, Str *storage_class,
     Int type_start, Int type_end,
     Int var_start, Int var_end,
     Int init_start, Int init_end, Int var_pos,
-    bool is_class, bool is_extern) {
+    bool is_class, bool is_toplevel, DeclType decl_type) {
+  bool is_static = (decl_type == StaticDecl);
+  bool is_extern = (decl_type == ExternDecl);
   parser->emit(Token(SymGen, storage_class));
   parser->emit(space);
   parser->emit_range(type_start, type_end);
@@ -185,13 +228,20 @@ void EmitDecl(Parser *parser, Str *storage_class,
   parser->emit_range(var_start, var_pos);
   parser->emit(Token(SymGen, var_name));
   parser->emit_range(var_pos+1, var_end);
+  if (is_static && !is_class && IsLiteral(parser, init_start+1, init_end)) {
+      parser->emit(space);
+      parser->emit_range(init_start, init_end);
+      parser->emit(semicolon);
+      return;
+  }
   parser->emit(semicolon);
   if (is_class) {
     class_vars->add(var_name, S("(*")->add(var_name)->add(")"));
     class_types->add(var_name, parser->token(type_start).str);
   }
   if ((is_class && !is_extern) || init_start >= 0) {
-    init_list->add(var_name);
+    if (is_toplevel)
+      init_list->add(var_name);
     Token var_init = Token(SymGen, var_name->clone()->add("__INIT__"));
     parser->emit(static_token);
     parser->emit(space);
@@ -205,14 +255,24 @@ void EmitDecl(Parser *parser, Str *storage_class,
       parser->emit_range(init_start, init_end);
     }
     parser->emit(semicolon);
+    if (!is_toplevel && !parser->c_source()) {
+      parser->init_count++;
+      parser->emit(Token(SymGen, S(
+        "static pSingular_register_init_var(void *, void *, long);"
+        "class %s__CONSTR__ {\n"
+        "  %s__CONSTR__() {\n"
+        "    pSingular_register_init_var(&%s, &%s__INIT__, sizeof(%s));\n"
+        "  }\n"
+        "} %s__AUX__;\n"
+      )->replace_all(S("%s"), var_name)));
+    }
   }
 }
 
-void EmitEpilogue(Parser *parser, SourceFile *source) {
+void EmitEpilogue(Parser *parser) {
   if (init_list->len() == 0)
     return;
-  Str *modulename = source->modulename;
-  int c_source = source->filename->ends_with(".c");
+  Str *modulename = parser->source->modulename;
   TokenList *output = parser->output;
   for (Int i = 0; i < output->len(); i++) {
     Token &token = output->at(i);
@@ -221,7 +281,7 @@ void EmitEpilogue(Parser *parser, SourceFile *source) {
     }
   }
   Str *init_part;
-  if (c_source) {
+  if (parser->c_source()) {
     init_part = S("\n"
       "void pSingular_init_var(const void *s, const void *t, long n);\n"
       "void *pSingular_alloc_var(long n);\n"
@@ -235,6 +295,15 @@ void EmitEpilogue(Parser *parser, SourceFile *source) {
       "void pSingular_init_var(const void *s, const void *t, long n);\n"
       "void *pSingular_alloc_var(long n);\n"
       "void pSingular_register_init(void (*f)());\n"
+      "}\n"
+      "typedef struct {\n"
+      "  void *target; void *source; long size;\n"
+      "} pSingular_var_desc;\n"
+      "static pSingular_var_desc[%n] pSingular_var_descs;\n"
+      "static void pSingular_register_init_var(void *t, void *s, long n) {\n"
+      "  pSingular_var_desc * p = pSingular_var_descs;\n"
+      "  while (p->target) p++;\n"
+      "  p->target = t; p->source = s; p->size = n;\n"
       "}\n"
       "static void pSingular_mod_init() {\n"
       );
@@ -255,9 +324,10 @@ void EmitEpilogue(Parser *parser, SourceFile *source) {
     }
   }
   init_part->add("}\n");
+  init_part = init_part->replace_all(S("%n"), S(parser->init_count));
   parser->emit(Token(SymGen, init_part));
   Str *init_rest;
-  if (c_source) {
+  if (parser->c_source()) {
     init_rest = S(
       "__attribute__((constructor))"
       "static void pSingular_init_%s(void) {\n"
@@ -278,7 +348,7 @@ void EmitEpilogue(Parser *parser, SourceFile *source) {
 }
 
 void TransformVarDecl(Parser *parser, Str *storage_class,
-    bool is_class = false, bool is_extern = false) {
+    bool is_class, bool is_toplevel, DeclType decl_type) {
   // We rewrite: VAR type a, b = init, c;
   // as:
   // storage_class type a;
@@ -325,13 +395,13 @@ void TransformVarDecl(Parser *parser, Str *storage_class,
       case SymComma:
         EmitDecl(parser, storage_class,
           type_start, type_end, var_start, var_end,
-          init_start, init_end, var_pos, is_class, is_extern);
+          init_start, init_end, var_pos, is_class, is_toplevel, decl_type);
         parser->advance();
         break;
       case SymSemicolon:
         EmitDecl(parser, storage_class,
           type_start, type_end, var_start, var_end,
-          init_start, init_end, var_pos, is_class, is_extern);
+          init_start, init_end, var_pos, is_class, is_toplevel, decl_type);
         parser->advance();
         parser->mark();
         return;
@@ -344,14 +414,26 @@ void TransformVarDecl(Parser *parser, Str *storage_class,
   }
 }
 
+bool IsToplevel(Arr<int> *stack) {
+  if (stack->len() == 0) return true;
+  for (Int i = 0; i < stack->len(); i++) {
+    if (!stack->at(i)) return false;
+  }
+  return true;
+}
+
 TokenList *Transform(SourceFile *source) {
-  Parser *parser = new Parser(source->tokens);
+  Parser *parser = new Parser(source);
+  Arr<int> *toplevel = new Arr<int>();
+  int tl = 0;
   while (parser->current().sym != SymEOF) {
     parser->skip_until(SymsSpecial);
     parser->push_marked();
+    bool is_toplevel = IsToplevel(toplevel);
     switch (parser->current().sym) {
       case SymVAR:
-        TransformVarDecl(parser, decl_var);
+        TransformVarDecl(parser, decl_var,
+          false, is_toplevel, NormalDecl);
         break;
       case SymEXTERN_VAR:
         parser->current().str = decl_extern_var;
@@ -359,16 +441,39 @@ TokenList *Transform(SourceFile *source) {
         parser->push_marked();
         break;
       case SymSTATIC_VAR:
-        TransformVarDecl(parser, decl_static_var);
+        TransformVarDecl(parser, decl_static_var,
+          false, is_toplevel, StaticDecl);
         break;
       case SymINST_VAR:
-        TransformVarDecl(parser, decl_var, true);
+        TransformVarDecl(parser, decl_var,
+          true, is_toplevel, NormalDecl);
         break;
       case SymEXTERN_INST_VAR:
-        TransformVarDecl(parser, decl_extern_var, true, true);
+        TransformVarDecl(parser, decl_extern_var,
+          true, is_toplevel, ExternDecl);
         break;
       case SymSTATIC_INST_VAR:
-        TransformVarDecl(parser, decl_static_var, true);
+        TransformVarDecl(parser, decl_static_var,
+          true, is_toplevel, StaticDecl);
+        break;
+      case SymExtern:
+        if (parser->next().sym != SymLiteral)
+          break;
+        if (!parser->next().str->eq("\"C\""))
+          break;
+        // fall through
+      case SymNamespace:
+        tl = 1;
+        parser->advance();
+        break;
+      case SymLBrace:
+        toplevel->add(tl);
+        parser->advance();
+        break;
+      case SymRBrace:
+        if (toplevel->len() > 0)
+          toplevel->pop();
+        parser->advance();
         break;
       case SymEOF:
         break;
@@ -377,7 +482,7 @@ TokenList *Transform(SourceFile *source) {
         return NULL;
     }
   }
-  EmitEpilogue(parser, source);
+  EmitEpilogue(parser);
   return parser->output;
 }
 

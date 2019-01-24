@@ -15,6 +15,7 @@ static InitList *inits;
 void pSingular_initialize_thread() {
   InitList *list = inits;
   while (list) {
+    list->func();
     list = list->next;
   }
 }

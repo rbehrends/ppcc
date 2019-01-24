@@ -159,7 +159,7 @@ int ParseOpt(Str *opt, char *arg) {
 
 void TestOutputExecutable() {
   if (mode == LINK) {
-    Str *path = S("Singular/threadsupport.c");
+    Str *path = S("Singular/threadsupport.cc");
     for (Int i = 0; i < 4; i++) {
       if (FileStat(path)) {
         ExtraArgs->add(path);
@@ -221,7 +221,7 @@ Str *RunCPP() {
 void PassThroughCompiler() {
   if (debug)
     PrintLn(S("Pass through: ")->
-      add(StrJoin(Args, S(" "))));
+      add(StrJoin(Args->clone()->add(ExtraArgs), S(" "))));
   if (ArgC <= 1) {
     Error("no arguments");
   }

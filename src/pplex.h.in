@@ -20,7 +20,8 @@ static const Word64 SymsPunct =
   BIT(SymLBrkt) | BIT(SymRBrkt) | BIT(SymLBrace) | BIT(SymRBrace);
 static const Word64 SymsSpecial =
   BIT(SymVAR) | BIT(SymEXTERN_VAR) | BIT(SymSTATIC_VAR) |
-  BIT(SymINST_VAR) | BIT(SymEXTERN_INST_VAR) | BIT(SymSTATIC_INST_VAR);
+  BIT(SymINST_VAR) | BIT(SymEXTERN_INST_VAR) | BIT(SymSTATIC_INST_VAR) |
+  BIT(SymNamespace) | BIT(SymExtern) | BIT(SymLBrace) | BIT(SymRBrace);
 static const Word64 SymsEndDecl =
   BIT(SymEqual) | BIT(SymComma) | BIT(SymSemicolon);
 static const Word64 SymsTypePrefix =
